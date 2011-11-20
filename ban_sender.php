@@ -177,7 +177,7 @@ function ssh_route_get_compete($in_arr) {
 				}
 			}
 			if (count($for_unban)) {
-				$ip_b_content.="\n#UnBanning:\n";
+				#$ip_b_content.="\n#UnBanning:\n";
 				foreach($for_unban as $ip) {
 					if (!$ip) continue;
 					if ($ip=='0.0.0.0') continue;//чисто на всякий случай
