@@ -1,4 +1,5 @@
 <?php
+if (!isset($argv[0])) die("Only console mode.");//запрещаем запуск через web
 /**
  * Крутится в бесконечном цикле и анализирует появляющиеся строки в логе вебсервера
  * Каждая новая строка разбивается на параметры и передаётся функции ddos_detector,
@@ -135,10 +136,6 @@ function analyze($st) {
 	$i=strpos($tmh,':');
 	$tmh=substr($tmh,$i+1);
 
-	//если включен модуль мониторинга последних вызовов
-	if (function_exists('last_hit_push'))
-		last_hit_push($ans,$tmh,$ip,$scheme,$url,$par,$country3,$front);
-
 	//Встречался нам раньше этот IP, или он новый?
 	if (isset($ip_time_all[$ip])) {
 		//если ip-адрес уже встречался, подсчитаем о нём всякие параметры
@@ -175,6 +172,12 @@ function analyze($st) {
 		if ($scv=='6') return;//если вызов протокола ipv6 не будем анализиовать дальше
 	}
 
+	//если включен модуль мониторинга последних вызовов
+	if (function_exists('last_hit_push')) {
+		last_hit_push(compact(
+			'ans','tmh','ip','scheme','url','par','country3','front','scv'
+		));
+	}
 	//вот здесь-то мы и должны решить, банить этот IP или не банить.
 	$must_be_banned = ddos_detector(compact(
 		'tm','is_script',
@@ -185,7 +188,7 @@ function analyze($st) {
 		if ($ans=='200') {//если наш ответ был 200, добавим IP в бан на .htaccess
 			// должен быть прописан в конфиге $f_htaccess='/var/www/.htaccess';
 			$f=fopen($f_htaccess,'a');
-			if ($f) {
+			if ($f) {//дописываем в .htaccess строку "Deny from $ip"
 				fwrite($f,"\nDeny from $ip");
 				fclose($f);
 				echo "\n***";
@@ -237,9 +240,9 @@ function ddos_detector($in_arr) {
 
 	$must_be_banned=false; //презумпция невиновности
 
-	//разумеется, конкретные параметры детектирования подстраивать под конкретный ддос.
-
 	//есть ли в запросе паттерны, характереные для вражеских вызовов?
+	//@ разумеется, конкретные параметры детектирования подстраивать под конкретный ддос.
+	//@ и в данном случае даётся лишь простейший пример детектирования:
 	$its_very_bad=(strpos($par,'t=202371')!==false);
 
 	$badcnt=0; //подсчитем, сколько раз на этм IP детектились плохие паттерны
