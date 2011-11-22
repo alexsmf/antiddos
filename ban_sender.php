@@ -1,9 +1,11 @@
 <?php
+if (!isset($argv[0])) die("Only console mode.");//запрещаем запуск через web
+
 include 'ad_config.php';
 
 $fronts_set=$fronts_arr;//массив фронтендов, на которые будем рассылать баны
 
-$wait_int=3;//будем ждать 3х5=15 секунд перед повтором рабочего цикла.
+$wait_int=3;//будем ждать 3 секунды перед повтором рабочего цикла.
 
 include('process_controller.php');
 $pman = new Process_controller();
@@ -15,6 +17,8 @@ $pman->sleep_time = 2;//время ожидания между опросом с
 
 db_connect(true);
 
+$db_old_cnt=0;//предыдущее кол-во забаненых IP-адресов
+$check_frontends_last_time=0;//время предыдущего опроса фронтендов
 while(1){
 	$dbip_arr=array();//загрузим в массив бан-IP адреса какие есть в базе
 
@@ -35,41 +39,45 @@ while(1){
 		continue; 
 	}
 	//если в базе обнаружены забаненные IP-адреса
-	echo "$dbip_count banned IP in database\n";
-
-	//проверим состояние забанености на каждом фронтенде и если надо внесём изменения
-	foreach($fronts_set as $front) {
-		//echo "[$front]\n";
-		//каков IP-адрес фронтенда?
-		if(!isset($front_ip[$front])) { echo "Unknown frontend '$front'\n"; continue; }
-		$fr_ip=$front_ip[$front];
-		//придумаем имя файла со списком изменений в route-таблицу
-		$ip_b_name='ip_b_'.$front.'.list';
-		$ip_b_file='/var/tmp/'.$ip_b_name;
-		//придумаем имя файла для дампа текущего состояния ip route list
-		$ip_d_name='from_'.$front.'.routes';
-		$ip_d_file='/var/tmp/'.$ip_d_name;
-		//запомним нужные переменные в $tag, они будут передаваться процессам по цепочке
-		$tag=compact('front','fr_ip','ip_b_file','ip_d_file');
-		//добавляем задачу: сделать дамп ip route в файл $ip_d_file, и коллбэк на выход
-		$pman->addScript(
-			"ssh -i ~/.ssh/$front root@$fr_ip ".//удалённое исполнение команды
-			escapeshellarg("ip route list>$ip_d_file"),//сама исполняемая команда
-			30, 'ssh_route_dump_complete',$tag //по исполнению будет вызван коллбэк
-		);
-	}
-	//запускаем все добавленные выше задания
-	echo "Start...\n";
-	$pman->exec();
-	echo "Complete.\n";
+	if ($dbip_count != $db_old_cnt || time()-$check_frontents_last_time>30 ) {
+		echo "$dbip_count banned IP in database\n";
+		$check_frontents_last_time=time();
+		//проверим состояние забанености на каждом фронтенде и если надо внесём изменения
+		foreach($fronts_set as $front) {
+			//echo "[$front]\n";
+			//каков IP-адрес фронтенда?
+			if(!isset($front_ip[$front])) { echo "Unknown frontend '$front'\n"; continue; }
+			$fr_ip=$front_ip[$front];
+			//придумаем имя файла со списком изменений в route-таблицу
+			$ip_b_name='ip_b_'.$front.'.list';
+			$ip_b_file='/var/tmp/'.$ip_b_name;
+			//придумаем имя файла для дампа текущего состояния ip route list
+			$ip_d_name='from_'.$front.'.routes';
+			$ip_d_file='/var/tmp/'.$ip_d_name;
+			//запомним нужные переменные в $tag, они будут передаваться процессам по цепочке
+			$tag=compact('front','fr_ip','ip_b_file','ip_d_file');
+			//добавляем задачу: сделать дамп ip route в файл $ip_d_file, и коллбэк на выход
+			$pman->addScript(
+				"ssh -i ~/.ssh/$front root@$fr_ip ".//удалённое исполнение команды
+				escapeshellarg("ip route list>$ip_d_file"),//сама исполняемая команда
+				5, 'ssh_route_dump_complete',$tag //по исполнению будет вызван коллбэк
+			);
+		} 
+		//запускаем все добавленные выше задания
+		echo "Checking frontends...\n";
+		$pman->exec();
+		echo "Complete.\n";
+	} else echo " -$dbip_count- ";
 	//подождем ($wait_int x 5) секунд
-	echo "Wait ";
+	echo "Wait";
 	for($i=$wait_int;$i>0;$i--) {
-		echo shell_exec("sleep 5").'('.$i.')';
+		sleep(1);
+		echo ' '.$i;
 	}
 	//хватит ждать, продолжнаем, поехали исполнять всё заново
-	echo "Go\n";
+	echo " Go\n";
 	//конец рабочего цикла, начинаем всё заново
+	$db_old_cnt=$dbip_count;
 }
 /**
  * Когда завершится задание ip route list > в файл, вызовется этот коллбэк.
@@ -137,13 +145,13 @@ function ssh_route_get_compete($in_arr) {
 		$ipban_cnt=count($banned_ip);
 		if ($ipban_cnt) {
 			$diff=$dbip_count - $ipban_cnt;
-			if (!$diff) echo 'all';
+			if (!$diff) echo '===';
 			else {
 				if ($diff>0) echo '+';
-				echo $diff.' ban, total '.$ipban_cnt;
+				echo $diff.' ban';//.$ipban_cnt;
 			}
-		} else echo "No";
-		echo " IP banned on $front\n";
+		} else echo "No IP banned ";
+		echo " on $front\n";
 		if(count($banned_net)) {
 			echo ' '.count($banned_net)." banned networks on $front\n";
 		}
@@ -162,8 +170,8 @@ function ssh_route_get_compete($in_arr) {
 				$for_unban[]=$ip;
 			}
 		}
-		if (count($for_ban)) echo count($for_ban)." IP must be banned on $front\n";
-		if (count($for_unban)) echo count($for_unban)." IP must be UNbanned on $front\n";
+		//if (count($for_ban)) echo count($for_ban)." IP must be banned on $front\n";
+		//if (count($for_unban)) echo count($for_unban)." IP must be UNbanned on $front\n";
 
 		if (count($for_ban)||count($for_unban)) {
 			$ip_b_content='';//"#!/bin/bash\n\n";
@@ -221,7 +229,7 @@ function ssh_banlist_execute_complete($in_arr){
 		if ($in_arr['stderr']) {
 			echo "ERROR SSH '$ip_b_file' on '$front'($fr_ip):\n".$in_arr['stderr'];
 		} else {
-			echo "OK SSH '$front'($fr_ip) changes complete.\n";
+			echo "SSH '$front'($fr_ip) changes OK.\n";
 		}
 	} else {
 		echo "SSH execution '$ip_b_file' on '$front'($fr_ip) timeout.\n";
